@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="claws.png" alt="A Risk of Lobsters" width="500">
+</p>
+
 # Claw Platform Evaluation Environment
 
 Side-by-side evaluation of 4 personal AI agent platforms on a single Linux host, each running under its own isolated user account and talking to the operator via Telegram.
