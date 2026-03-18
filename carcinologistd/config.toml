@@ -1,0 +1,32 @@
+[telegram]
+bot_token = ""  # Set via CARCINOLOGISTD_TELEGRAM_TOKEN env
+chat_id = ""    # Set via CARCINOLOGISTD_TELEGRAM_CHAT env
+
+[intervals]
+repo_check = "6h"
+health_check = "5m"
+cve_scan = "12h"
+
+[[repos]]
+name = "nanoclaw"
+url = "https://api.github.com/repos/qwibitai/nanoclaw"
+user = "nancy"
+service = "nanoclaw.service"
+
+[[repos]]
+name = "zeroclaw"
+url = "https://api.github.com/repos/zeroclaw-labs/zeroclaw"
+user = "zlatan"
+service = "zeroclaw.service"
+
+[[repos]]
+name = "openclaw"
+url = "https://api.github.com/repos/openclaw/openclaw"
+user = "ollie"
+service = "openclaw.service"
+
+[[repos]]
+name = "ironclaw"
+url = "https://api.github.com/repos/nearai/ironclaw"
+user = "izzy"
+service = "ironclaw.service"

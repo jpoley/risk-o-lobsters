@@ -1,0 +1,42 @@
+# Cloned repositories (nested git repos, 94MB+)
+.repos/
+
+# Compiled binaries
+carcinologistd/carcinologistd
+*.exe
+*.o
+*.so
+*.a
+*.dylib
+
+# Logs and decision journals
+.logs/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+setup/env-map.sh
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Platform user mappings (host-specific)
+.platform-users
+
+# OS files
+.DS_Store
+Thumbs.db
+*~
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+
+# Temporary files
+*.tmp
+*.temp

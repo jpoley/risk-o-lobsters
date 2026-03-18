@@ -1,0 +1,16 @@
+[Unit]
+Description=Carcinologistd - Claw Platform Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=carcinologist
+ExecStart=/usr/local/bin/carcinologistd -config /etc/carcinologistd/config.toml
+Restart=on-failure
+RestartSec=30
+StateDirectory=carcinologistd
+EnvironmentFile=/etc/carcinologistd/env
+
+[Install]
+WantedBy=multi-user.target
