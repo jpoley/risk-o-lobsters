@@ -51,9 +51,14 @@ setup_node() {
     fi
 
     # Fallback: nvm
-    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    # Pin to ~/.nvm explicitly — don't inherit env or let XDG_CONFIG_HOME redirect
+    # nvm's installer uses XDG_CONFIG_HOME if NVM_DIR is unset, which would put
+    # nvm in ~/.config/nvm instead. We mkdir first so the installer doesn't bail
+    # on "NVM_DIR set but doesn't exist".
+    export NVM_DIR="$HOME/.nvm"
+    mkdir -p "$NVM_DIR"
 
-    if [[ ! -d "$NVM_DIR" ]]; then
+    if [[ ! -s "${NVM_DIR}/nvm.sh" ]]; then
         info "Installing nvm..."
         curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
     fi
