@@ -43,12 +43,22 @@ Vagrant.configure("2") do |config|
   # SigLevel to pull a fresh archlinux-keyring, then re-enable and upgrade.
   config.vm.provision "shell", privileged: true, inline: <<-SHELL
     set -euo pipefail
+    PACMAN_CONF="/etc/pacman.conf"
+    PACMAN_CONF_BAK="$(mktemp /tmp/pacman.conf.XXXXXX)"
+    cp "$PACMAN_CONF" "$PACMAN_CONF_BAK"
+    # Restore original pacman.conf on any exit (success or failure) so the VM
+    # is never left with SigLevel=Never if provisioning fails partway through.
+    trap 'cp "$PACMAN_CONF_BAK" "$PACMAN_CONF"; rm -f "$PACMAN_CONF_BAK"' EXIT
+
     echo "[provision] Fixing stale Arch keyring..."
     # Temporarily disable signature checking so we can pull a fresh keyring
-    sed -i 's/^SigLevel.*/SigLevel = Never/' /etc/pacman.conf
+    sed -i 's/^SigLevel.*/SigLevel = Never/' "$PACMAN_CONF"
     pacman -Sy --noconfirm archlinux-keyring 2>&1 | tail -5
-    # Restore sig checking and re-populate from the freshly installed keyring
-    sed -i 's/^SigLevel.*/SigLevel = Required DatabaseOptional/' /etc/pacman.conf
+    # Restore original pacman.conf and re-populate from the freshly installed keyring
+    cp "$PACMAN_CONF_BAK" "$PACMAN_CONF"
+    trap - EXIT
+    rm -f "$PACMAN_CONF_BAK"
+
     rm -rf /etc/pacman.d/gnupg
     pacman-key --init 2>&1 | tail -2
     pacman-key --populate archlinux 2>&1 | tail -3

@@ -152,8 +152,12 @@ These notes drove the script rewrites.
 
 The `install.sh` Phase 1 (host dependencies) is now distro-aware. Detected via `/etc/os-release`.
 
-**Supported Arch-based distros:** `arch`, `manjaro`, `endeavouros`, `cachyos`, `garuda`, `artix`
-(plus any distro with `ID_LIKE` containing `"arch"`)
+**Supported Arch-based distros:** `arch`, `manjaro`, `endeavouros`, `cachyos`, `garuda`
+(plus any distro with `ID_LIKE` containing `"arch"`, excluding `artix`)
+
+> **Note on Artix:** Artix uses pacman but replaces systemd with OpenRC or runit.
+> The setup scripts rely on `systemctl` and `loginctl` (user lingering, services),
+> so Artix is classified as `unknown` until a non-systemd init path is added.
 
 **Package mapping:**
 
@@ -165,7 +169,7 @@ The `install.sh` Phase 1 (host dependencies) is now distro-aware. Detected via `
 | psql (optional) | `postgresql-client` | `postgresql` (includes psql) |
 
 **Notes:**
-- Arch's `nodejs` in official repos ships a recent LTS — no external PPA needed
+- Arch's `nodejs` in official repos ships a recent Node.js — no external PPA needed (version may be newer than the LTS used on Debian)
 - `postgresql` on Arch includes the client tools (`psql`, `pg_dump`); the service is NOT started automatically
 - `create-user.sh` and all platform scripts (`platforms/*.sh`) work unchanged on Arch
   — they use `useradd`/`systemctl`/`loginctl` and per-user `fnm`/`nvm`/`curl` installs, which are all distro-agnostic

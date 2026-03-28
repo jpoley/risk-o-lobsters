@@ -288,14 +288,19 @@ else
         local id id_like
         id="$(. /etc/os-release; echo "${ID:-unknown}")"
         id_like="$(. /etc/os-release; echo "${ID_LIKE:-}")"
+        # Artix is Arch-based (pacman) but uses non-systemd init (OpenRC/runit).
+        # Later phases rely on systemctl/loginctl — classify as unknown so we
+        # don't silently break on a non-systemd system.
+        if [[ "$id" == "artix" ]]; then echo "unknown"; return; fi
         case "$id" in
-            arch|manjaro|endeavouros|cachyos|garuda|artix)
+            arch|manjaro|endeavouros|cachyos|garuda)
                 echo "arch"; return ;;
             debian|ubuntu|linuxmint|pop|elementary|kali|raspbian)
                 echo "debian"; return ;;
         esac
         # Fallback: check ID_LIKE (e.g. "arch" or "debian ubuntu")
-        if [[ "$id_like" == *"arch"* ]];   then echo "arch";    return; fi
+        # Skip artix via ID_LIKE too (it sets ID_LIKE=arch but is non-systemd)
+        if [[ "$id_like" == *"arch"* && "$id" != "artix" ]]; then echo "arch"; return; fi
         if [[ "$id_like" == *"debian"* || "$id_like" == *"ubuntu"* ]]; then
             echo "debian"; return
         fi
@@ -333,9 +338,11 @@ else
         apt-get update -qq 2>/dev/null || true
     fi
 
-    # ── Arch: sync pacman databases ──────────────────────────────────────
+    # ── Arch: full sync + upgrade to avoid partial-upgrade breakage ─────
+    # pacman -Sy alone (sync without upgrade) is dangerous on Arch rolling —
+    # new package metadata + old installed packages = partial upgrade state.
     if [[ "$DISTRO" == "arch" ]]; then
-        pacman -Sy --noconfirm 2>/dev/null || true
+        pacman -Syu --noconfirm 2>/dev/null || true
     fi
 
     # ── Step 1: Install missing host packages ────────────────────────────
@@ -369,11 +376,18 @@ else
                 # Arch ships both iptables-legacy and iptables-nft; Docker needs nft
                 # (legacy requires kernel modules not present on most Arch kernels).
                 pacman -S --noconfirm --needed docker
-                # Switch iptables to the nft backend (idempotent — safe to re-run)
-                ln -sf /usr/bin/iptables-nft         /usr/bin/iptables
-                ln -sf /usr/bin/iptables-nft-save    /usr/bin/iptables-save
-                ln -sf /usr/bin/iptables-nft-restore /usr/bin/iptables-restore
-                ln -sf /usr/bin/ip6tables-nft        /usr/bin/ip6tables 2>/dev/null || true
+                # Switch iptables to the nft backend — required on most Arch kernels
+                # (legacy backend needs kernel modules Arch doesn't load by default).
+                # Resolve via command -v to avoid dangling symlinks if a binary is missing.
+                for _pair in "iptables:iptables-nft" "iptables-save:iptables-nft-save" "iptables-restore:iptables-nft-restore" "ip6tables:ip6tables-nft"; do
+                    _dest="/usr/bin/${_pair%%:*}"
+                    _src="$(command -v "${_pair##*:}" 2>/dev/null || true)"
+                    if [[ -n "$_src" ]]; then
+                        ln -sf "$_src" "$_dest"
+                    else
+                        echo -e "  ${YELLOW}[WARN]${NC} ${_pair##*:} not found — skipping ${_dest} symlink"
+                    fi
+                done
                 systemctl enable --now docker 2>/dev/null || true
                 ;;
             debian)
@@ -402,7 +416,8 @@ else
         echo -e "  ${CYAN}[INSTALL]${NC} Node.js..."
         case "$DISTRO" in
             arch)
-                # Arch ships Node.js 22 in the official repos — no external repo needed
+                # Arch ships Node.js in the official repos — no external repo needed
+                # (version may be newer than the LTS pinned on Debian)
                 pacman -S --noconfirm --needed nodejs npm
                 ;;
             debian)

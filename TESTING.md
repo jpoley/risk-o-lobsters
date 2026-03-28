@@ -33,7 +33,7 @@ Tests that the original Debian/Ubuntu install path still works correctly.
 ### Steps
 
 ```bash
-# 1. Go to the test folder
+# 1. Go to the Ubuntu test folder
 cd tests/ubuntu
 
 # 2. Start the VM (downloads ~1GB Ubuntu image first time)
@@ -103,7 +103,7 @@ vagrant destroy -f
 [OK]     Node.js v25.8.2
 [OK]     git
 [OK]     curl
-[OK]     psql 18.3
+[OK]     psql installed
 [OK]     Host ready.
 ...
 [OK]     User 'zlatan' created
@@ -159,7 +159,7 @@ The setup scripts now support:
 | Family | Distros |
 |--------|---------|
 | **Debian/Ubuntu** | Ubuntu, Debian, Linux Mint, Pop!_OS, elementary OS, Kali |
-| **Arch** | Arch Linux, Manjaro, EndeavourOS, CachyOS, Garuda, Artix |
+| **Arch** | Arch Linux, Manjaro, EndeavourOS, CachyOS, Garuda |
 
 Any distro that declares itself Arch-based via `/etc/os-release` is supported.
 

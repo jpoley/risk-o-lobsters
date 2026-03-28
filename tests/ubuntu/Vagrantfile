@@ -1,0 +1,47 @@
+# -*- mode: ruby -*-
+# Vagrantfile — Ubuntu 24.04 regression test for risk-o-lobsters
+#
+# Validates the Debian/Ubuntu install path in setup/install.sh.
+# Run from this directory:
+#
+#   vagrant up --provider=libvirt
+#   vagrant ssh -c "sudo bash /project/setup/install.sh zeroclaw --as zlatan"
+#   vagrant destroy -f
+
+VM_CPUS   = Integer(ENV["VM_CPUS"]   || 2)
+VM_MEMORY = Integer(ENV["VM_MEMORY"] || 2048)
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "bento/ubuntu-24.04"
+  config.vm.box_check_update = false
+  config.vm.hostname = "ubuntu-claw"
+  config.vm.boot_timeout = 300
+  config.ssh.forward_agent = true
+
+  # Sync repo root into /project
+  config.vm.synced_folder "../..", "/project", type: "rsync",
+    rsync__exclude: [".git/", ".vagrant/", "tests/"]
+
+  config.vm.provider "libvirt" do |lv|
+    lv.cpus   = VM_CPUS
+    lv.memory = VM_MEMORY
+    lv.cpu_mode = "host-passthrough"
+    lv.nested = true
+  end
+
+  config.vm.provider "parallels" do |prl|
+    prl.cpus   = VM_CPUS
+    prl.memory = VM_MEMORY
+  end
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.cpus   = VM_CPUS
+    vb.memory = VM_MEMORY
+  end
+
+  config.vm.provision "shell", privileged: true, inline: <<-SHELL
+    set -euo pipefail
+    echo "[provision] Ubuntu 24.04 ready."
+    grep -E "^(NAME|ID|VERSION_ID)=" /etc/os-release
+  SHELL
+end
