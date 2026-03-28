@@ -173,4 +173,4 @@ The `install.sh` Phase 1 (host dependencies) is now distro-aware. Detected via `
 - `postgresql` on Arch includes the client tools (`psql`, `pg_dump`); the service is NOT started automatically
 - `create-user.sh` and all platform scripts (`platforms/*.sh`) work unchanged on Arch
   — they use `useradd`/`systemctl`/`loginctl` and per-user `fnm`/`nvm`/`curl` installs, which are all distro-agnostic
-- Unknown distros: Phase 1 warns and exits; platforms can still be installed manually
+- Unknown distros: Phase 1 checks for `systemctl`/`loginctl` and fails immediately if they are absent (Phase 2 requires systemd). If systemd is present, Phase 1 continues as long as Docker/Node/git/curl are already installed — but later phases may still fail if paths or package managers differ. Install platforms manually on unsupported distros.

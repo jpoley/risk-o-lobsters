@@ -338,11 +338,31 @@ else
         apt-get update -qq 2>/dev/null || true
     fi
 
+    # ── Unknown distro: require systemd before proceeding ────────────────
+    # Phase 2 (create-user.sh) uses systemctl + loginctl. If the distro is
+    # unrecognised AND systemd isn't present, later phases will definitely
+    # fail — catch it here with a clear message instead of a cryptic error.
+    if [[ "$DISTRO" == "unknown" ]]; then
+        if ! command -v systemctl &>/dev/null || ! command -v loginctl &>/dev/null; then
+            echo -e "  ${RED}[FAIL]${NC} Unsupported distro and systemd not found (systemctl/loginctl required)"
+            echo -e "         Install on a supported distro (Ubuntu, Debian, Arch) or ensure systemd is present."
+            host_ok=false
+        else
+            echo -e "  ${YELLOW}[WARN]${NC} Unrecognised distro — systemd found; continuing if tools are already installed"
+            echo -e "         Phase 2+ may still fail if package managers or paths differ."
+        fi
+    fi
+
     # ── Arch: full sync + upgrade to avoid partial-upgrade breakage ─────
-    # pacman -Sy alone (sync without upgrade) is dangerous on Arch rolling —
-    # new package metadata + old installed packages = partial upgrade state.
+    # pacman -Sy alone (without -u) is dangerous on Arch rolling — new
+    # package metadata + old binaries = partial-upgrade state.
+    # Surface the error rather than swallowing it: a failed upgrade leaves
+    # the host in an undefined state that will cause unpredictable failures.
     if [[ "$DISTRO" == "arch" ]]; then
-        pacman -Syu --noconfirm 2>/dev/null || true
+        if ! pacman -Syu --noconfirm; then
+            echo -e "  ${YELLOW}[WARN]${NC} pacman -Syu failed — host may be in a partial-upgrade state"
+            host_ok=false
+        fi
     fi
 
     # ── Step 1: Install missing host packages ────────────────────────────
@@ -396,7 +416,7 @@ else
                 ;;
             *)
                 echo -e "  ${YELLOW}[WARN]${NC} Unknown distro — install Docker manually then re-run"
-                $docker_required && host_ok=false
+                if $docker_required; then host_ok=false; fi
                 ;;
         esac
         if docker info &>/dev/null; then

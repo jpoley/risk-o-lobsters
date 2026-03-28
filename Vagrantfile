@@ -43,22 +43,16 @@ Vagrant.configure("2") do |config|
   # SigLevel to pull a fresh archlinux-keyring, then re-enable and upgrade.
   config.vm.provision "shell", privileged: true, inline: <<-SHELL
     set -euo pipefail
-    PACMAN_CONF="/etc/pacman.conf"
-    PACMAN_CONF_BAK="$(mktemp /tmp/pacman.conf.XXXXXX)"
-    cp "$PACMAN_CONF" "$PACMAN_CONF_BAK"
-    # Restore original pacman.conf on any exit (success or failure) so the VM
-    # is never left with SigLevel=Never if provisioning fails partway through.
-    trap 'cp "$PACMAN_CONF_BAK" "$PACMAN_CONF"; rm -f "$PACMAN_CONF_BAK"' EXIT
 
     echo "[provision] Fixing stale Arch keyring..."
-    # Temporarily disable signature checking so we can pull a fresh keyring
-    sed -i 's/^SigLevel.*/SigLevel = Never/' "$PACMAN_CONF"
-    pacman -Sy --noconfirm archlinux-keyring 2>&1 | tail -5
-    # Restore original pacman.conf and re-populate from the freshly installed keyring
-    cp "$PACMAN_CONF_BAK" "$PACMAN_CONF"
-    trap - EXIT
-    rm -f "$PACMAN_CONF_BAK"
-
+    # Use a temporary pacman config with SigLevel=Never so the system config
+    # is never touched — limits scope of the trust bypass to this one command.
+    PACMAN_CONF_TMP="$(mktemp /tmp/pacman.conf.XXXXXX)"
+    cp /etc/pacman.conf "$PACMAN_CONF_TMP"
+    sed -i 's/^SigLevel.*/SigLevel = Never/' "$PACMAN_CONF_TMP"
+    pacman --config "$PACMAN_CONF_TMP" -Sy --noconfirm archlinux-keyring 2>&1 | tail -5
+    rm -f "$PACMAN_CONF_TMP"
+    # Re-populate keyring from the freshly installed package (no network call)
     rm -rf /etc/pacman.d/gnupg
     pacman-key --init 2>&1 | tail -2
     pacman-key --populate archlinux 2>&1 | tail -3
@@ -67,7 +61,9 @@ Vagrant.configure("2") do |config|
     pacman -Syu --noconfirm 2>&1 | tail -15
 
     echo "[provision] Installing base tools..."
-    pacman -S --noconfirm --needed sudo curl git bash 2>&1 | grep -v "^warning" | tail -10
+    # Avoid grep here — with set -euo pipefail, grep exits 1 if no lines match,
+    # which would abort provisioning even on a successful pacman install.
+    pacman -S --noconfirm --needed sudo curl git bash 2>&1 | tail -10
 
     systemctl enable dbus.service 2>/dev/null || true
     echo "[provision] Arch VM ready."
