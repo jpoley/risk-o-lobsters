@@ -279,73 +279,151 @@ if $DRY_RUN; then
 else
     host_ok=true
 
-    # ── Step 0: Repair broken dpkg/apt state if needed ───────────────
-    # Packages can get stuck half-configured (e.g. nvidia kernel modules
-    # when headers are missing). This poisons ALL subsequent apt operations.
-    # We loop: try apt-get -f install, if it fails because a newly-triggered
-    # package script fails, neutralize that script and retry. Max 3 rounds.
-    repair_apt() {
-        local attempt
-        for attempt in 1 2 3; do
-            # Any half-configured/half-installed packages? Neutralize scripts.
-            local stuck
-            stuck="$(dpkg -l 2>/dev/null | awk '/^.[FHU]/{print $2}')"
-            if [[ -n "$stuck" ]]; then
-                echo -e "  ${CYAN}[FIX]${NC} Clearing broken packages (round ${attempt})..."
-                for pkg in $stuck; do
-                    for s in postinst prerm postrm preinst; do
-                        [[ -f "/var/lib/dpkg/info/${pkg}.${s}" ]] && printf '#!/bin/sh\nexit 0\n' > "/var/lib/dpkg/info/${pkg}.${s}"
-                    done
-                done
-                dpkg --configure -a 2>/dev/null || true
-            fi
-
-            # Try to resolve unmet dependencies
-            if DEBIAN_FRONTEND=noninteractive apt-get -f install -y -qq 2>/dev/null; then
-                return 0  # apt is healthy
-            fi
-        done
-        # If we're still here, apt is unfixable
-        echo -e "  ${YELLOW}[WARN]${NC} Could not fully repair apt — continuing anyway"
+    # ── Distro detection ─────────────────────────────────────────────────
+    # Returns: "arch" | "debian" | "unknown"
+    # Covers Arch-based: arch, manjaro, endeavouros, cachyos, garuda, etc.
+    # Covers Debian-based: debian, ubuntu, linuxmint, pop, etc.
+    detect_distro() {
+        if [[ ! -r /etc/os-release ]]; then echo "unknown"; return; fi
+        local id id_like
+        id="$(. /etc/os-release; echo "${ID:-unknown}")"
+        id_like="$(. /etc/os-release; echo "${ID_LIKE:-}")"
+        case "$id" in
+            arch|manjaro|endeavouros|cachyos|garuda|artix)
+                echo "arch"; return ;;
+            debian|ubuntu|linuxmint|pop|elementary|kali|raspbian)
+                echo "debian"; return ;;
+        esac
+        # Fallback: check ID_LIKE (e.g. "arch" or "debian ubuntu")
+        if [[ "$id_like" == *"arch"* ]];   then echo "arch";    return; fi
+        if [[ "$id_like" == *"debian"* || "$id_like" == *"ubuntu"* ]]; then
+            echo "debian"; return
+        fi
+        echo "unknown"
     }
 
-    # Check if apt works at all (dry-run install of something already installed)
-    if ! apt-get install --dry-run coreutils &>/dev/null; then
-        repair_apt
+    DISTRO="$(detect_distro)"
+    echo -e "  ${CYAN}[DISTRO]${NC} ${DISTRO}"
+
+    # ── Debian: repair broken dpkg state before any apt calls ────────────
+    if [[ "$DISTRO" == "debian" ]]; then
+        repair_apt() {
+            local attempt
+            for attempt in 1 2 3; do
+                local stuck
+                stuck="$(dpkg -l 2>/dev/null | awk '/^.[FHU]/{print $2}')"
+                if [[ -n "$stuck" ]]; then
+                    echo -e "  ${CYAN}[FIX]${NC} Clearing broken packages (round ${attempt})..."
+                    for pkg in $stuck; do
+                        for s in postinst prerm postrm preinst; do
+                            [[ -f "/var/lib/dpkg/info/${pkg}.${s}" ]] && printf '#!/bin/sh\nexit 0\n' > "/var/lib/dpkg/info/${pkg}.${s}"
+                        done
+                    done
+                    dpkg --configure -a 2>/dev/null || true
+                fi
+                if DEBIAN_FRONTEND=noninteractive apt-get -f install -y -qq 2>/dev/null; then
+                    return 0
+                fi
+            done
+            echo -e "  ${YELLOW}[WARN]${NC} Could not fully repair apt — continuing anyway"
+        }
+        if ! apt-get install --dry-run coreutils &>/dev/null; then
+            repair_apt
+        fi
+        apt-get update -qq 2>/dev/null || true
     fi
 
-    apt-get update -qq 2>/dev/null || true
+    # ── Arch: sync pacman databases ──────────────────────────────────────
+    if [[ "$DISTRO" == "arch" ]]; then
+        pacman -Sy --noconfirm 2>/dev/null || true
+    fi
 
-    # ── Step 1: Install missing host packages ────────────────────────
+    # ── Step 1: Install missing host packages ────────────────────────────
 
     # Docker
+    # Only fail hard if at least one target platform actually requires Docker.
+    # ZeroClaw and OpenClaw don't need it; NanoClaw and IronClaw do.
+    docker_required=false
+    for _p in "${TARGETS[@]}"; do
+        [[ "${PLATFORM_DOCKER[$_p]:-no}" == "yes" ]] && docker_required=true && break
+    done
+
     if command -v docker &>/dev/null && docker info &>/dev/null; then
         echo -e "  ${GREEN}[OK]${NC} Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null)"
     elif command -v docker &>/dev/null; then
         echo -e "  ${CYAN}[FIX]${NC} Docker not running — starting..."
-        systemctl enable --now docker
-        docker info &>/dev/null && echo -e "  ${GREEN}[OK]${NC} Docker started" || { echo -e "  ${RED}[FAIL]${NC} Docker won't start"; host_ok=false; }
+        systemctl enable --now docker 2>/dev/null || true
+        if docker info &>/dev/null; then
+            echo -e "  ${GREEN}[OK]${NC} Docker started"
+        elif $docker_required; then
+            echo -e "  ${RED}[FAIL]${NC} Docker won't start (required for: ${TARGETS[*]})"
+            host_ok=false
+        else
+            echo -e "  ${YELLOW}[WARN]${NC} Docker installed but not running — OK (not required for: ${TARGETS[*]})"
+        fi
     else
         echo -e "  ${CYAN}[INSTALL]${NC} Docker..."
-        apt-get install -y -qq --no-install-recommends docker.io
-        systemctl enable --now docker
-        docker info &>/dev/null && echo -e "  ${GREEN}[OK]${NC} Docker installed" || { echo -e "  ${RED}[FAIL]${NC} Docker install failed"; host_ok=false; }
+        case "$DISTRO" in
+            arch)
+                # On Arch, the package is 'docker' (not docker.io).
+                # Arch ships both iptables-legacy and iptables-nft; Docker needs nft
+                # (legacy requires kernel modules not present on most Arch kernels).
+                pacman -S --noconfirm --needed docker
+                # Switch iptables to the nft backend (idempotent — safe to re-run)
+                ln -sf /usr/bin/iptables-nft         /usr/bin/iptables
+                ln -sf /usr/bin/iptables-nft-save    /usr/bin/iptables-save
+                ln -sf /usr/bin/iptables-nft-restore /usr/bin/iptables-restore
+                ln -sf /usr/bin/ip6tables-nft        /usr/bin/ip6tables 2>/dev/null || true
+                systemctl enable --now docker 2>/dev/null || true
+                ;;
+            debian)
+                apt-get install -y -qq --no-install-recommends docker.io
+                systemctl enable --now docker
+                ;;
+            *)
+                echo -e "  ${YELLOW}[WARN]${NC} Unknown distro — install Docker manually then re-run"
+                $docker_required && host_ok=false
+                ;;
+        esac
+        if docker info &>/dev/null; then
+            echo -e "  ${GREEN}[OK]${NC} Docker installed and running"
+        elif $docker_required; then
+            echo -e "  ${RED}[FAIL]${NC} Docker install failed (required for: ${TARGETS[*]})"
+            host_ok=false
+        else
+            echo -e "  ${YELLOW}[WARN]${NC} Docker installed, daemon not running — OK (not required for: ${TARGETS[*]})"
+        fi
     fi
 
     # Node.js
     if command -v node &>/dev/null; then
         echo -e "  ${GREEN}[OK]${NC} Node.js $(node --version)"
     else
-        echo -e "  ${CYAN}[INSTALL]${NC} Node.js 22 via nodesource..."
-        apt-get install -y -qq --no-install-recommends ca-certificates curl gnupg
-        mkdir -p /etc/apt/keyrings
-        if [[ ! -f /etc/apt/keyrings/nodesource.gpg ]]; then
-            curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
-        fi
-        echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
-        apt-get update -qq 2>/dev/null || true
-        apt-get install -y -qq --no-install-recommends nodejs
-        command -v node &>/dev/null && echo -e "  ${GREEN}[OK]${NC} Node.js $(node --version)" || { echo -e "  ${RED}[FAIL]${NC} Node.js install failed"; host_ok=false; }
+        echo -e "  ${CYAN}[INSTALL]${NC} Node.js..."
+        case "$DISTRO" in
+            arch)
+                # Arch ships Node.js 22 in the official repos — no external repo needed
+                pacman -S --noconfirm --needed nodejs npm
+                ;;
+            debian)
+                apt-get install -y -qq --no-install-recommends ca-certificates curl gnupg
+                mkdir -p /etc/apt/keyrings
+                if [[ ! -f /etc/apt/keyrings/nodesource.gpg ]]; then
+                    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+                        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+                fi
+                echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+                    > /etc/apt/sources.list.d/nodesource.list
+                apt-get update -qq 2>/dev/null || true
+                apt-get install -y -qq --no-install-recommends nodejs
+                ;;
+            *)
+                echo -e "  ${YELLOW}[WARN]${NC} Unknown distro — install Node.js 22+ manually then re-run"
+                host_ok=false
+                ;;
+        esac
+        command -v node &>/dev/null && echo -e "  ${GREEN}[OK]${NC} Node.js $(node --version)" \
+            || { echo -e "  ${RED}[FAIL]${NC} Node.js install failed"; host_ok=false; }
     fi
 
     # git, curl — essential
@@ -354,8 +432,13 @@ else
             echo -e "  ${GREEN}[OK]${NC} ${pkg}"
         else
             echo -e "  ${CYAN}[INSTALL]${NC} ${pkg}..."
-            apt-get install -y -qq --no-install-recommends "$pkg"
-            command -v "$pkg" &>/dev/null && echo -e "  ${GREEN}[OK]${NC} ${pkg}" || { echo -e "  ${RED}[FAIL]${NC} ${pkg} install failed"; host_ok=false; }
+            case "$DISTRO" in
+                arch)   pacman -S --noconfirm --needed "$pkg" ;;
+                debian) apt-get install -y -qq --no-install-recommends "$pkg" ;;
+                *)      echo -e "  ${YELLOW}[WARN]${NC} Unknown distro — install ${pkg} manually" ;;
+            esac
+            command -v "$pkg" &>/dev/null && echo -e "  ${GREEN}[OK]${NC} ${pkg}" \
+                || { echo -e "  ${RED}[FAIL]${NC} ${pkg} install failed"; host_ok=false; }
         fi
     done
 
@@ -363,13 +446,28 @@ else
     if command -v psql &>/dev/null; then
         echo -e "  ${GREEN}[OK]${NC} psql $(psql --version | awk '{print $3}')"
     else
-        echo -e "  ${CYAN}[INSTALL]${NC} postgresql-client..."
-        apt-get install -y -qq --no-install-recommends postgresql-client 2>/dev/null \
-            && echo -e "  ${GREEN}[OK]${NC} psql installed" \
-            || echo -e "  ${YELLOW}[WARN]${NC} psql install failed (optional — docker exec will be used)"
+        echo -e "  ${CYAN}[INSTALL]${NC} postgresql client..."
+        case "$DISTRO" in
+            arch)
+                # On Arch, psql is bundled in the 'postgresql' package.
+                # 'postgresql-libs' provides libpq only — no psql binary.
+                # Install the full package; don't start the service.
+                pacman -S --noconfirm --needed postgresql 2>/dev/null \
+                    && echo -e "  ${GREEN}[OK]${NC} psql installed" \
+                    || echo -e "  ${YELLOW}[WARN]${NC} psql install failed (optional — docker exec will be used)"
+                ;;
+            debian)
+                apt-get install -y -qq --no-install-recommends postgresql-client 2>/dev/null \
+                    && echo -e "  ${GREEN}[OK]${NC} psql installed" \
+                    || echo -e "  ${YELLOW}[WARN]${NC} psql install failed (optional — docker exec will be used)"
+                ;;
+            *)
+                echo -e "  ${YELLOW}[WARN]${NC} Unknown distro — psql optional, skipping"
+                ;;
+        esac
     fi
 
-    # ── Step 2: Non-apt checks ───────────────────────────────────────
+    # ── Step 2: Distro-agnostic checks ───────────────────────────────────
 
     # Disk space
     AVAIL_GB=$(( $(df --output=avail / | tail -1 | tr -d ' ') / 1024 / 1024 ))
