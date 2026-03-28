@@ -338,19 +338,18 @@ else
         apt-get update -qq 2>/dev/null || true
     fi
 
-    # ── Unknown distro: require systemd before proceeding ────────────────
-    # Phase 2 (create-user.sh) uses systemctl + loginctl. If the distro is
-    # unrecognised AND systemd isn't present, later phases will definitely
-    # fail — catch it here with a clear message instead of a cryptic error.
-    if [[ "$DISTRO" == "unknown" ]]; then
-        if ! command -v systemctl &>/dev/null || ! command -v loginctl &>/dev/null; then
-            echo -e "  ${RED}[FAIL]${NC} Unsupported distro and systemd not found (systemctl/loginctl required)"
-            echo -e "         Install on a supported distro (Ubuntu, Debian, Arch) or ensure systemd is present."
-            host_ok=false
-        else
-            echo -e "  ${YELLOW}[WARN]${NC} Unrecognised distro — systemd found; continuing if tools are already installed"
-            echo -e "         Phase 2+ may still fail if package managers or paths differ."
-        fi
+    # ── Systemd tools: required for Phase 2 on all distros ──────────────
+    # Phase 2 (create-user.sh) calls loginctl (lingering) and systemctl
+    # (user services). Check unconditionally — containers, WSL, and
+    # non-systemd variants of any distro can report a known ID but still
+    # lack these tools, leading to cryptic failures later.
+    if ! command -v systemctl &>/dev/null || ! command -v loginctl &>/dev/null; then
+        echo -e "  ${RED}[FAIL]${NC} systemd tools not found (systemctl/loginctl required by this installer)"
+        echo -e "         Run on a system with systemd (Ubuntu, Debian, Arch) or ensure these tools are present."
+        host_ok=false
+    elif [[ "$DISTRO" == "unknown" ]]; then
+        echo -e "  ${YELLOW}[WARN]${NC} Unrecognised distro — systemd found; continuing if tools are already installed"
+        echo -e "         Phase 2+ may still fail if package managers or paths differ."
     fi
 
     # ── Arch: full sync + upgrade to avoid partial-upgrade breakage ─────
@@ -370,9 +369,14 @@ else
     # Docker
     # Only fail hard if at least one target platform actually requires Docker.
     # ZeroClaw and OpenClaw don't need it; NanoClaw and IronClaw do.
+    # Build an explicit list of docker-requiring targets for accurate messages.
     docker_required=false
+    docker_targets=()
     for _p in "${TARGETS[@]}"; do
-        [[ "${PLATFORM_DOCKER[$_p]:-no}" == "yes" ]] && docker_required=true && break
+        if [[ "${PLATFORM_DOCKER[$_p]:-no}" == "yes" ]]; then
+            docker_required=true
+            docker_targets+=("$_p")
+        fi
     done
 
     if command -v docker &>/dev/null && docker info &>/dev/null; then
@@ -383,10 +387,10 @@ else
         if docker info &>/dev/null; then
             echo -e "  ${GREEN}[OK]${NC} Docker started"
         elif $docker_required; then
-            echo -e "  ${RED}[FAIL]${NC} Docker won't start (required for: ${TARGETS[*]})"
+            echo -e "  ${RED}[FAIL]${NC} Docker won't start (required for: ${docker_targets[*]})"
             host_ok=false
         else
-            echo -e "  ${YELLOW}[WARN]${NC} Docker installed but not running — OK (not required for: ${TARGETS[*]})"
+            echo -e "  ${YELLOW}[WARN]${NC} Docker installed but not running — OK (not required for: ${docker_targets[*]})"
         fi
     else
         echo -e "  ${CYAN}[INSTALL]${NC} Docker..."
@@ -419,13 +423,18 @@ else
                 if $docker_required; then host_ok=false; fi
                 ;;
         esac
-        if docker info &>/dev/null; then
+        # Check CLI presence first — "not installed" and "daemon not running"
+        # are distinct failure modes; conflating them gives misleading output.
+        if ! command -v docker &>/dev/null; then
+            echo -e "  ${RED}[FAIL]${NC} Docker not installed"
+            if $docker_required; then host_ok=false; fi
+        elif docker info &>/dev/null; then
             echo -e "  ${GREEN}[OK]${NC} Docker installed and running"
         elif $docker_required; then
-            echo -e "  ${RED}[FAIL]${NC} Docker install failed (required for: ${TARGETS[*]})"
+            echo -e "  ${RED}[FAIL]${NC} Docker daemon not running (required for: ${docker_targets[*]})"
             host_ok=false
         else
-            echo -e "  ${YELLOW}[WARN]${NC} Docker installed, daemon not running — OK (not required for: ${TARGETS[*]})"
+            echo -e "  ${YELLOW}[WARN]${NC} Docker installed, daemon not running — OK (not required for: ${docker_targets[*]})"
         fi
     fi
 
